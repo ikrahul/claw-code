@@ -470,6 +470,15 @@ impl AnthropicClient {
         let request_url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
         let mut request_body = self.request_profile.render_json_body(request)?;
         strip_unsupported_beta_body_fields(&mut request_body);
+        // Strip routing prefix (e.g. "anthropic/LongCat-Flash-Chat" → "LongCat-Flash-Chat").
+        // The prefix is used only to select this provider; backends expect the bare model id.
+        if let Some(model) = request_body.get_mut("model").and_then(|v| v.as_str().map(str::to_owned)) {
+            let wire_model = model
+                .strip_prefix("anthropic/")
+                .unwrap_or(&model)
+                .to_owned();
+            request_body["model"] = serde_json::Value::String(wire_model);
+        }
         let request_builder = self.build_request(&request_url).json(&request_body);
         request_builder.send().await.map_err(ApiError::from)
     }
@@ -480,7 +489,16 @@ impl AnthropicClient {
             .post(request_url)
             .header("content-type", "application/json");
         let mut request_builder = self.auth.apply(request_builder);
+        // anthropic-beta enables Anthropic-native features (prompt caching scope, etc.)
+        // that third-party compat proxies do not implement. Sending these headers to
+        // non-Anthropic endpoints causes them to hang trying to activate unknown features.
+        // Strip the beta header when using a custom base URL.
+        let is_native_anthropic =
+            self.base_url.trim_end_matches('/') == DEFAULT_BASE_URL.trim_end_matches('/');
         for (header_name, header_value) in self.request_profile.header_pairs() {
+            if !is_native_anthropic && header_name == "anthropic-beta" {
+                continue;
+            }
             request_builder = request_builder.header(header_name, header_value);
         }
         request_builder
@@ -763,7 +781,10 @@ fn read_auth_token() -> Option<String> {
 
 #[must_use]
 pub fn read_base_url() -> String {
-    std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
+    read_env_non_empty("ANTHROPIC_BASE_URL")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
 }
 
 fn request_id_from_headers(headers: &reqwest::header::HeaderMap) -> Option<String> {

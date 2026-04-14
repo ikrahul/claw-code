@@ -254,7 +254,7 @@ impl OpenAiCompatClient {
             .post(&request_url)
             .header("content-type", "application/json")
             .bearer_auth(&self.api_key)
-            .json(&build_chat_completion_request(request, self.config()))
+            .json(&build_chat_completion_request(request, self.config(), &self.base_url))
             .send()
             .await
             .map_err(ApiError::from)
@@ -786,7 +786,7 @@ fn strip_routing_prefix(model: &str) -> &str {
     }
 }
 
-fn build_chat_completion_request(request: &MessageRequest, config: OpenAiCompatConfig) -> Value {
+fn build_chat_completion_request(request: &MessageRequest, config: OpenAiCompatConfig, base_url: &str) -> Value {
     let mut messages = Vec::new();
     if let Some(system) = request.system.as_ref().filter(|value| !value.is_empty()) {
         messages.push(json!({
@@ -825,7 +825,7 @@ fn build_chat_completion_request(request: &MessageRequest, config: OpenAiCompatC
         "stream": request.stream,
     });
 
-    if request.stream && should_request_stream_usage(config) {
+    if request.stream && should_request_stream_usage(config, base_url) {
         payload["stream_options"] = json!({ "include_usage": true });
     }
 
@@ -1059,8 +1059,11 @@ fn openai_tool_choice(tool_choice: &ToolChoice) -> Value {
     }
 }
 
-fn should_request_stream_usage(config: OpenAiCompatConfig) -> bool {
-    matches!(config.provider_name, "OpenAI")
+fn should_request_stream_usage(config: OpenAiCompatConfig, base_url: &str) -> bool {
+    // Only inject stream_options for the canonical OpenAI endpoint.
+    // Third-party compat proxies (LongCat, OpenRouter, etc.) often hang
+    // or reject requests that contain this field.
+    matches!(config.provider_name, "OpenAI") && base_url == DEFAULT_OPENAI_BASE_URL
 }
 
 fn normalize_response(
@@ -1212,7 +1215,10 @@ pub fn has_api_key(key: &str) -> bool {
 
 #[must_use]
 pub fn read_base_url(config: OpenAiCompatConfig) -> String {
-    std::env::var(config.base_url_env).unwrap_or_else(|_| config.default_base_url.to_string())
+    read_env_non_empty(config.base_url_env)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| config.default_base_url.to_string())
 }
 
 fn chat_completions_endpoint(base_url: &str) -> String {
@@ -1289,7 +1295,7 @@ mod tests {
     use super::{
         build_chat_completion_request, chat_completions_endpoint, is_reasoning_model,
         normalize_finish_reason, openai_tool_choice, parse_tool_arguments, OpenAiCompatClient,
-        OpenAiCompatConfig,
+        OpenAiCompatConfig, DEFAULT_OPENAI_BASE_URL, DEFAULT_XAI_BASE_URL,
     };
     use crate::error::ApiError;
     use crate::types::{
@@ -1331,6 +1337,7 @@ mod tests {
                 ..Default::default()
             },
             OpenAiCompatConfig::xai(),
+            DEFAULT_XAI_BASE_URL,
         );
 
         assert_eq!(payload["messages"][0]["role"], json!("system"));
@@ -1392,6 +1399,7 @@ mod tests {
                 ..Default::default()
             },
             OpenAiCompatConfig::openai(),
+            DEFAULT_OPENAI_BASE_URL,
         );
         assert_eq!(payload["reasoning_effort"], json!("high"));
     }
@@ -1406,6 +1414,7 @@ mod tests {
                 ..Default::default()
             },
             OpenAiCompatConfig::openai(),
+            DEFAULT_OPENAI_BASE_URL,
         );
         assert!(payload.get("reasoning_effort").is_none());
     }
@@ -1424,6 +1433,7 @@ mod tests {
                 ..Default::default()
             },
             OpenAiCompatConfig::openai(),
+            DEFAULT_OPENAI_BASE_URL,
         );
 
         assert_eq!(payload["stream_options"], json!({"include_usage": true}));
@@ -1443,6 +1453,7 @@ mod tests {
                 ..Default::default()
             },
             OpenAiCompatConfig::xai(),
+            DEFAULT_XAI_BASE_URL,
         );
 
         assert!(payload.get("stream_options").is_none());
@@ -1529,7 +1540,7 @@ mod tests {
             stop: Some(vec!["\n".to_string()]),
             reasoning_effort: None,
         };
-        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai());
+        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai(), DEFAULT_OPENAI_BASE_URL);
         assert_eq!(payload["temperature"], 0.7);
         assert_eq!(payload["top_p"], 0.9);
         assert_eq!(payload["frequency_penalty"], 0.5);
@@ -1551,7 +1562,7 @@ mod tests {
             stop: Some(vec!["\n".to_string()]),
             ..Default::default()
         };
-        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai());
+        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai(), DEFAULT_OPENAI_BASE_URL);
         assert!(
             payload.get("temperature").is_none(),
             "reasoning model should strip temperature"
@@ -1602,7 +1613,7 @@ mod tests {
             stream: false,
             ..Default::default()
         };
-        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai());
+        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai(), DEFAULT_OPENAI_BASE_URL);
         assert!(
             payload.get("temperature").is_none(),
             "temperature should be absent"
@@ -1624,7 +1635,7 @@ mod tests {
             stream: false,
             ..Default::default()
         };
-        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai());
+        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai(), DEFAULT_OPENAI_BASE_URL);
         assert_eq!(
             payload["max_completion_tokens"],
             json!(512),
@@ -1687,7 +1698,7 @@ mod tests {
             stream: false,
             ..Default::default()
         };
-        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai());
+        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai(), DEFAULT_OPENAI_BASE_URL);
         let messages = payload["messages"].as_array().unwrap();
         let assistant_msg = messages
             .iter()
@@ -1719,7 +1730,7 @@ mod tests {
             stream: false,
             ..Default::default()
         };
-        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai());
+        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai(), DEFAULT_OPENAI_BASE_URL);
         let messages = payload["messages"].as_array().unwrap();
         let assistant_msg = messages
             .iter()
@@ -1787,7 +1798,7 @@ mod tests {
             stream: false,
             ..Default::default()
         };
-        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai());
+        let payload = build_chat_completion_request(&request, OpenAiCompatConfig::openai(), DEFAULT_OPENAI_BASE_URL);
         assert_eq!(payload["max_tokens"], json!(512));
         assert!(
             payload.get("max_completion_tokens").is_none(),
