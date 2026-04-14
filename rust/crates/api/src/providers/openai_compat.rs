@@ -875,8 +875,8 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
             let mut tool_calls = Vec::new();
             for block in &message.content {
                 match block {
-                    InputContentBlock::Text { text: value } => text.push_str(value),
-                    InputContentBlock::ToolUse { id, name, input } => tool_calls.push(json!({
+                    InputContentBlock::Text { text: value, .. } => text.push_str(value),
+                    InputContentBlock::ToolUse { id, name, input, .. } => tool_calls.push(json!({
                         "id": id,
                         "type": "function",
                         "function": {
@@ -885,6 +885,7 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                         }
                     })),
                     InputContentBlock::ToolResult { .. } => {}
+                    InputContentBlock::Thinking { .. } | InputContentBlock::RedactedThinking { .. } => {}
                 }
             }
             if text.is_empty() && tool_calls.is_empty() {
@@ -906,7 +907,7 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
             .content
             .iter()
             .filter_map(|block| match block {
-                InputContentBlock::Text { text } => Some(json!({
+                InputContentBlock::Text { text, .. } => Some(json!({
                     "role": "user",
                     "content": text,
                 })),
@@ -914,6 +915,7 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                     tool_use_id,
                     content,
                     is_error,
+                    ..
                 } => Some(json!({
                     "role": "tool",
                     "tool_call_id": tool_use_id,
@@ -921,6 +923,7 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                     "is_error": is_error,
                 })),
                 InputContentBlock::ToolUse { .. } => None,
+                InputContentBlock::Thinking { .. } | InputContentBlock::RedactedThinking { .. } => None,
             })
             .collect(),
     }
@@ -998,8 +1001,8 @@ fn flatten_tool_result_content(content: &[ToolResultContentBlock]) -> String {
     content
         .iter()
         .map(|block| match block {
-            ToolResultContentBlock::Text { text } => text.clone(),
-            ToolResultContentBlock::Json { value } => value.to_string(),
+            ToolResultContentBlock::Text { text, .. } => text.clone(),
+            ToolResultContentBlock::Json { value, .. } => value.to_string(),
         })
         .collect::<Vec<_>>()
         .join("\n")

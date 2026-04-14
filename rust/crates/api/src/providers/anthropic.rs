@@ -17,7 +17,8 @@ use crate::http_client::build_http_client_or_default;
 use crate::prompt_cache::{PromptCache, PromptCacheRecord, PromptCacheStats};
 
 use super::{
-    anthropic_missing_credentials, model_token_limit, resolve_model_alias, Provider, ProviderFuture,
+    anthropic_missing_credentials, max_tokens_for_model, model_token_limit, resolve_model_alias,
+    Provider, ProviderFuture,
 };
 use crate::sse::SseParser;
 use crate::types::{MessageDeltaEvent, MessageRequest, MessageResponse, StreamEvent, Usage};
@@ -470,6 +471,77 @@ impl AnthropicClient {
         let request_url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
         let mut request_body = self.request_profile.render_json_body(request)?;
         strip_unsupported_beta_body_fields(&mut request_body);
+
+        let model_max_tokens = max_tokens_for_model(&request.model);
+
+        // Map reasoning_effort into Anthropic's extended thinking parameters
+        if let Some(effort) = &request.reasoning_effort {
+            let mut budget_tokens = match effort.as_str() {
+                "low" => 2048,
+                "medium" => 8192,
+                "high" => 32768,
+                _ => 8192,
+            };
+
+            // Ensure budget doesn't exceed 80% of model's max output tokens
+            let max_budget_ceiling = (model_max_tokens as f64 * 0.8) as u32;
+            if budget_tokens > max_budget_ceiling {
+                budget_tokens = max_budget_ceiling;
+            }
+
+            request_body["thinking"] = serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": budget_tokens
+            });
+            // Anthropic strictly requires max_tokens > budget_tokens.
+            let min_max_tokens = budget_tokens.saturating_add(4096).min(model_max_tokens);
+            if request.max_tokens < min_max_tokens {
+                request_body["max_tokens"] = serde_json::Value::Number(min_max_tokens.into());
+            }
+        }
+
+        // Automatic Prompt Caching: Tag system prompt and relevant messages
+        // We tag the system prompt as it's almost always reused.
+        if let Some(system) = request_body.get_mut("system") {
+            if let Some(text) = system.as_str() {
+                // Convert string system prompt to block format with cache_control
+                *system = serde_json::json!([
+                    {
+                        "type": "text",
+                        "text": text,
+                        "cache_control": { "type": "ephemeral" }
+                    }
+                ]);
+            } else if let Some(blocks) = system.as_array_mut() {
+                // If it's already an array, tag the last block
+                if let Some(last_block) = blocks.last_mut() {
+                    if let Some(obj) = last_block.as_object_mut() {
+                        obj.insert("cache_control".to_string(), serde_json::json!({ "type": "ephemeral" }));
+                    }
+                }
+            }
+        }
+
+        // Tag the second-to-last user message for caching (standard practice to cache history)
+        if let Some(messages) = request_body.get_mut("messages").and_then(|v| v.as_array_mut()) {
+            if messages.len() >= 4 {
+                // Find the second-to-last user message usually at index (len - 3) or (len - 5)
+                // We'll tag the one around the 2/3 mark or near the end.
+                let cache_index = messages.len().saturating_sub(4);
+                if let Some(msg) = messages.get_mut(cache_index) {
+                    if let Some(content) = msg.get_mut("content") {
+                        if let Some(blocks) = content.as_array_mut() {
+                            if let Some(last_block) = blocks.last_mut() {
+                                if let Some(obj) = last_block.as_object_mut() {
+                                    obj.insert("cache_control".to_string(), serde_json::json!({ "type": "ephemeral" }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Strip routing prefix (e.g. "anthropic/LongCat-Flash-Chat" → "LongCat-Flash-Chat").
         // The prefix is used only to select this provider; backends expect the bare model id.
         if let Some(model) = request_body.get_mut("model").and_then(|v| v.as_str().map(str::to_owned)) {

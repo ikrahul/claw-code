@@ -4750,12 +4750,16 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
                 .blocks
                 .iter()
                 .map(|block| match block {
-                    ContentBlock::Text { text } => InputContentBlock::Text { text: text.clone() },
+                    ContentBlock::Text { text } => InputContentBlock::Text {
+                        text: text.clone(),
+                        cache_control: None,
+                    },
                     ContentBlock::ToolUse { id, name, input } => InputContentBlock::ToolUse {
                         id: id.clone(),
                         name: name.clone(),
                         input: serde_json::from_str(input)
                             .unwrap_or_else(|_| serde_json::json!({ "raw": input })),
+                        cache_control: None,
                     },
                     ContentBlock::ToolResult {
                         tool_use_id,
@@ -4766,9 +4770,23 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
                         tool_use_id: tool_use_id.clone(),
                         content: vec![ToolResultContentBlock::Text {
                             text: output.clone(),
+                            cache_control: None,
                         }],
                         is_error: *is_error,
+                        cache_control: None,
                     },
+                    ContentBlock::Thinking { thinking, signature } => InputContentBlock::Thinking {
+                        thinking: thinking.clone(),
+                        signature: signature.clone(),
+                        cache_control: None,
+                    },
+                    ContentBlock::RedactedThinking { data, signature } => {
+                        InputContentBlock::RedactedThinking {
+                            data: data.clone(),
+                            signature: signature.clone(),
+                            cache_control: None,
+                        }
+                    }
                 })
                 .collect::<Vec<_>>();
             (!content.is_empty()).then(|| InputMessage {

@@ -267,6 +267,20 @@ pub fn model_token_limit(model: &str) -> Option<ModelTokenLimit> {
             max_output_tokens: 64_000,
             context_window_tokens: 131_072,
         }),
+        "longcat-flash-omni-2603" => Some(ModelTokenLimit {
+            max_output_tokens: 8_000,
+            context_window_tokens: 1_000_000,
+        }),
+        "longcat-flash-chat"
+        | "longcat-flash-thinking"
+        | "longcat-flash-thinking-2601" => Some(ModelTokenLimit {
+            max_output_tokens: 256_000,
+            context_window_tokens: 1_000_000,
+        }),
+        "longcat-flash-lite" => Some(ModelTokenLimit {
+            max_output_tokens: 320_000,
+            context_window_tokens: 1_000_000,
+        }),
         _ => None,
     }
 }

@@ -10,6 +10,8 @@ mod init;
 mod input;
 mod render;
 
+use crossterm::style::Stylize;
+
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
@@ -2003,6 +2005,7 @@ fn dump_manifests_at_path(
     manifests_dir: Option<&Path>,
     output_format: CliOutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use crossterm::style::Stylize;
     let paths = if let Some(dir) = manifests_dir {
         let resolved = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         UpstreamPaths::from_repo_root(resolved)
@@ -5881,6 +5884,12 @@ fn render_export_text(session: &Session) -> String {
                         "[tool_result id={tool_use_id} name={tool_name} error={is_error}] {output}"
                     ));
                 }
+                ContentBlock::Thinking { thinking, .. } => {
+                    lines.push(format!("[thinking] {thinking}"));
+                }
+                ContentBlock::RedactedThinking { .. } => {
+                    lines.push("[thinking redacted]".to_string());
+                }
             }
         }
         lines.push(String::new());
@@ -6080,6 +6089,16 @@ fn render_session_markdown(session: &Session, session_id: &str, session_path: &P
                     if !summary.is_empty() {
                         lines.push(format!("> {summary}"));
                     }
+                    lines.push(String::new());
+                }
+                ContentBlock::Thinking { thinking, .. } => {
+                    lines.push("**Thinking**".to_string());
+                    lines.push(String::new());
+                    lines.push(thinking.clone());
+                    lines.push(String::new());
+                }
+                ContentBlock::RedactedThinking { .. } => {
+                    lines.push("**Thinking redacted by provider**".to_string());
                     lines.push(String::new());
                 }
             }
@@ -6927,13 +6946,22 @@ impl AnthropicRuntimeClient {
                             input.push_str(&partial_json);
                         }
                     }
-                    ContentBlockDelta::ThinkingDelta { .. } => {
-                        if !block_has_thinking_summary {
-                            render_thinking_block_summary(out, None, false)?;
-                            block_has_thinking_summary = true;
+                    ContentBlockDelta::ThinkingDelta { thinking } => {
+                        if !thinking.is_empty() {
+                            if !block_has_thinking_summary {
+                                render_thinking_block_summary(out, None, false)?;
+                                block_has_thinking_summary = true;
+                            }
+                            let styled = thinking.clone().stylize().italic().with(renderer.color_theme().quote);
+                            write!(out, "{styled}")
+                                .and_then(|()| out.flush())
+                                .map_err(|error| RuntimeError::new(error.to_string()))?;
+                            events.push(AssistantEvent::ThinkingDelta(thinking));
                         }
                     }
-                    ContentBlockDelta::SignatureDelta { .. } => {}
+                    ContentBlockDelta::SignatureDelta { signature } => {
+                        events.push(AssistantEvent::SignatureDelta(signature));
+                    }
                 },
                 ApiStreamEvent::ContentBlockStop(_) => {
                     block_has_thinking_summary = false;
@@ -7858,6 +7886,7 @@ fn push_output_block(
         OutputContentBlock::Thinking { thinking, .. } => {
             render_thinking_block_summary(out, Some(thinking.chars().count()), false)?;
             *block_has_thinking_summary = true;
+            events.push(AssistantEvent::ThinkingDelta(thinking));
         }
         OutputContentBlock::RedactedThinking { .. } => {
             render_thinking_block_summary(out, None, true)?;
@@ -8075,12 +8104,16 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
                 .blocks
                 .iter()
                 .map(|block| match block {
-                    ContentBlock::Text { text } => InputContentBlock::Text { text: text.clone() },
+                    ContentBlock::Text { text } => InputContentBlock::Text {
+                        text: text.clone(),
+                        cache_control: None,
+                    },
                     ContentBlock::ToolUse { id, name, input } => InputContentBlock::ToolUse {
                         id: id.clone(),
                         name: name.clone(),
                         input: serde_json::from_str(input)
                             .unwrap_or_else(|_| serde_json::json!({ "raw": input })),
+                        cache_control: None,
                     },
                     ContentBlock::ToolResult {
                         tool_use_id,
@@ -8091,9 +8124,23 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
                         tool_use_id: tool_use_id.clone(),
                         content: vec![ToolResultContentBlock::Text {
                             text: output.clone(),
+                            cache_control: None,
                         }],
                         is_error: *is_error,
+                        cache_control: None,
                     },
+                    ContentBlock::Thinking { thinking, signature } => InputContentBlock::Thinking {
+                        thinking: thinking.clone(),
+                        signature: signature.clone(),
+                        cache_control: None,
+                    },
+                    ContentBlock::RedactedThinking { data, signature } => {
+                        InputContentBlock::RedactedThinking {
+                            data: data.clone(),
+                            signature: signature.clone(),
+                            cache_control: None,
+                        }
+                    }
                 })
                 .collect::<Vec<_>>();
             (!content.is_empty()).then(|| InputMessage {

@@ -36,6 +36,8 @@ pub enum AssistantEvent {
     },
     Usage(TokenUsage),
     PromptCache(PromptCacheEvent),
+    ThinkingDelta(String),
+    SignatureDelta(String),
     MessageStop,
 }
 
@@ -718,11 +720,16 @@ fn build_assistant_message(
     let mut prompt_cache_events = Vec::new();
     let mut finished = false;
     let mut usage = None;
+    let mut thinking = String::new();
+    let mut signature = None;
 
     for event in events {
         match event {
             AssistantEvent::TextDelta(delta) => text.push_str(&delta),
+            AssistantEvent::ThinkingDelta(delta) => thinking.push_str(&delta),
+            AssistantEvent::SignatureDelta(sig) => signature = Some(sig),
             AssistantEvent::ToolUse { id, name, input } => {
+                flush_thinking_block(&mut thinking, &mut signature, &mut blocks);
                 flush_text_block(&mut text, &mut blocks);
                 blocks.push(ContentBlock::ToolUse { id, name, input });
             }
@@ -734,6 +741,7 @@ fn build_assistant_message(
         }
     }
 
+    flush_thinking_block(&mut thinking, &mut signature, &mut blocks);
     flush_text_block(&mut text, &mut blocks);
 
     if !finished {
@@ -756,6 +764,19 @@ fn flush_text_block(text: &mut String, blocks: &mut Vec<ContentBlock>) {
     if !text.is_empty() {
         blocks.push(ContentBlock::Text {
             text: std::mem::take(text),
+        });
+    }
+}
+
+fn flush_thinking_block(
+    thinking: &mut String,
+    signature: &mut Option<String>,
+    blocks: &mut Vec<ContentBlock>,
+) {
+    if !thinking.is_empty() {
+        blocks.push(ContentBlock::Thinking {
+            thinking: std::mem::take(thinking),
+            signature: signature.take(),
         });
     }
 }

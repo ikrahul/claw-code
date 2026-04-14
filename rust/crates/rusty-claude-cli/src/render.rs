@@ -13,17 +13,17 @@ use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorTheme {
-    heading: Color,
-    emphasis: Color,
-    strong: Color,
-    inline_code: Color,
-    link: Color,
-    quote: Color,
-    table_border: Color,
-    code_block_border: Color,
-    spinner_active: Color,
-    spinner_done: Color,
-    spinner_failed: Color,
+    pub heading: Color,
+    pub emphasis: Color,
+    pub strong: Color,
+    pub inline_code: Color,
+    pub link: Color,
+    pub quote: Color,
+    pub table_border: Color,
+    pub code_block_border: Color,
+    pub spinner_active: Color,
+    pub spinner_done: Color,
+    pub spinner_failed: Color,
 }
 
 impl Default for ColorTheme {

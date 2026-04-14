@@ -244,7 +244,7 @@ fn find_header_end(bytes: &[u8]) -> Option<usize> {
 fn detect_scenario(request: &MessageRequest) -> Option<Scenario> {
     request.messages.iter().rev().find_map(|message| {
         message.content.iter().rev().find_map(|block| match block {
-            InputContentBlock::Text { text } => text
+            InputContentBlock::Text { text, .. } => text
                 .split_whitespace()
                 .find_map(|token| token.strip_prefix(SCENARIO_PREFIX))
                 .and_then(Scenario::parse),
@@ -281,6 +281,7 @@ fn tool_results_by_name(request: &MessageRequest) -> HashMap<String, (String, bo
                 tool_use_id,
                 content,
                 is_error,
+                ..
             } = block
             {
                 let tool_name = tool_names_by_id
@@ -300,8 +301,8 @@ fn flatten_tool_result_content(content: &[api::ToolResultContentBlock]) -> Strin
     content
         .iter()
         .map(|block| match block {
-            api::ToolResultContentBlock::Text { text } => text.clone(),
-            api::ToolResultContentBlock::Json { value } => value.to_string(),
+            api::ToolResultContentBlock::Text { text, .. } => text.clone(),
+            api::ToolResultContentBlock::Json { value, .. } => value.to_string(),
         })
         .collect::<Vec<_>>()
         .join("\n")
